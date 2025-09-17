@@ -1,3 +1,5 @@
+# Add this at the top with your other variables
+FACEBOOK_VERIFICATION_TOKEN = "Personal92!"  # ← Change this to any secret phrase
 @app.route('/facebook-webhook', methods=['POST'])
 def facebook_webhook():
     try:
