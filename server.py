@@ -1,160 +1,103 @@
-from flask import Flask, request, jsonify, render_template_string
+import os
+import json
 import datetime
+import tempfile
+from flask import Flask, request, jsonify, send_from_directory, render_template_string
 
-app = Flask(__name__)
+# use static folder named "static"
+app = Flask(__name__, static_folder="static", static_url_path="/static")
 
-# Store comments in memory (reset on restart)
-comments = []
-
-# Facebook Verify Token
 VERIFY_TOKEN = "Personal92!"
+STATIC_FOLDER = app.static_folder
+LATEST_PATH = os.path.join(STATIC_FOLDER, "latest_comment.json")
 
-# -------------------------------
-# Facebook Webhook Verification
-# -------------------------------
-@app.route("/", methods=["GET"])
-def facebook_verify():
-    mode = request.args.get("hub.mode")
-    token = request.args.get("hub.verify_token")
-    challenge = request.args.get("hub.challenge")
+# ensure static folder exists and an initial latest_comment.json
+os.makedirs(STATIC_FOLDER, exist_ok=True)
+if not os.path.exists(LATEST_PATH):
+    with open(LATEST_PATH, "w", encoding="utf-8") as f:
+        json.dump({"user":"", "comment":""}, f, ensure_ascii=False)
 
-    if mode == "subscribe" and token == VERIFY_TOKEN:
-        print("✅ Facebook webhook verified!")
-        return challenge, 200
-    else:
-        return "Verification failed", 403
+# ---------- Facebook verification + webhook endpoint ----------
+@app.route("/", methods=["GET", "POST"])
+def webhook_root():
+    if request.method == "GET":
+        # Facebook verification
+        mode = request.args.get("hub.mode")
+        token = request.args.get("hub.verify_token")
+        challenge = request.args.get("hub.challenge")
+        if mode == "subscribe" and token == VERIFY_TOKEN:
+            return challenge, 200
+        # Browser hit -> friendly message
+        return "OBS Webhook Server — use /ui or /overlay", 200
 
+    # POST: Facebook will send events here
+    data = request.get_json(silent=True)
+    print("Received webhook POST:", data, flush=True)
 
-# -------------------------------
-# Facebook Webhook Event Receiver
-# -------------------------------
-@app.route("/", methods=["POST"])
-def facebook_webhook():
-    data = request.get_json()
-    print("📩 Facebook Webhook Event:", data)
-
-    # Optional: store as a comment for testing
-    comments.append({
-        "user": "Facebook",
-        "comment": str(data),
-        "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    })
+    # parse feed changes and extract comment + user
+    try:
+        for entry in (data or {}).get("entry", []):
+            for change in entry.get("changes", []):
+                if change.get("field") == "feed":
+                    value = change.get("value", {})
+                    if value.get("item") == "comment" or value.get("verb") == "add":
+                        user = value.get("from", {}).get("name") or "FacebookUser"
+                        message = value.get("message") or value.get("text") or ""
+                        if message:
+                            payload = {"user": user, "comment": message, "time": datetime.datetime.utcnow().isoformat()}
+                            # atomic write to static/latest_comment.json
+                            fd, tmp_path = tempfile.mkstemp(dir=STATIC_FOLDER)
+                            with os.fdopen(fd, "w", encoding="utf-8") as tmp:
+                                json.dump(payload, tmp, ensure_ascii=False)
+                            os.replace(tmp_path, LATEST_PATH)
+    except Exception as e:
+        print("Error parsing webhook:", e, flush=True)
 
     return "EVENT_RECEIVED", 200
 
 
-# -------------------------------
-# OBS Webhook Endpoints
-# -------------------------------
+# ---------- OBS test endpoint (keeps your existing flow) ----------
 @app.route("/webhook", methods=["POST"])
 def obs_webhook():
-    data = request.get_json()
-    print("🎥 OBS Webhook Event:", data)
-
-    comments.append({
-        "user": data.get("user", "Anonymous"),
-        "comment": data.get("comment", ""),
-        "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    })
-
-    return jsonify({"status": "success", "message": "Comment received!"}), 200
-
-
-@app.route("/comments", methods=["GET"])
-def get_comments():
-    return jsonify(comments)
+    data = request.get_json(silent=True) or {}
+    user = data.get("user", "OBS")
+    comment = data.get("comment", "")
+    if comment:
+        payload = {"user": user, "comment": comment, "time": datetime.datetime.utcnow().isoformat()}
+        fd, tmp_path = tempfile.mkstemp(dir=STATIC_FOLDER)
+        with os.fdopen(fd, "w", encoding="utf-8") as tmp:
+            json.dump(payload, tmp, ensure_ascii=False)
+        os.replace(tmp_path, LATEST_PATH)
+    return jsonify({"status": "ok"}), 200
 
 
-@app.route("/clear", methods=["POST"])
-def clear_comments():
-    comments.clear()
-    return jsonify({"status": "cleared"})
+# ---------- endpoint to read latest comment (used by overlay) ----------
+@app.route("/latest_comment", methods=["GET"])
+def latest_comment():
+    try:
+        with open(LATEST_PATH, "r", encoding="utf-8") as f:
+            return jsonify(json.load(f))
+    except Exception:
+        return jsonify({"user":"", "comment":""})
 
 
-@app.route("/health", methods=["GET"])
-def health_check():
-    return jsonify({"status": "running", "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+# ---------- serve overlay HTML from /overlay ----------
+@app.route("/overlay")
+def overlay():
+    # serve the static overlay.html if present, otherwise a fallback
+    overlay_path = os.path.join(STATIC_FOLDER, "overlay.html")
+    if os.path.exists(overlay_path):
+        return send_from_directory(STATIC_FOLDER, "overlay.html")
+    # fallback minimal page
+    return render_template_string("<h3>Overlay not found. Upload static/overlay.html</h3>"), 404
 
 
-# -------------------------------
-# Simple UI
-# -------------------------------
-@app.route("/ui", methods=["GET"])
-def home():
-    html = """
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>OBS Webhook Server</title>
-        <style>
-            body { font-family: Arial, sans-serif; margin: 20px; }
-            .card { background: #f9f9f9; padding: 20px; border-radius: 10px; margin-bottom: 20px; }
-            h1 { color: #0056ff; }
-            input, button { padding: 8px; margin: 5px; }
-        </style>
-    </head>
-    <body>
-        <h1>🎬 OBS Webhook Server</h1>
-        <p>Server is running and ready to receive comments!</p>
-
-        <div class="card">
-            <h3>📄 Available Endpoints:</h3>
-            <ul>
-                <li><b>POST /webhook</b> - Receive OBS comments (JSON)</li>
-                <li><b>GET /comments</b> - View all received comments</li>
-                <li><b>GET /health</b> - Check server status</li>
-                <li><b>POST /clear</b> - Clear all comments</li>
-                <li><b>GET /</b> - Facebook Webhook Verification</li>
-                <li><b>POST /</b> - Facebook Webhook Events</li>
-            </ul>
-        </div>
-
-        <div class="card">
-            <h3>🚀 Quick Test:</h3>
-            <form action="/webhook" method="post" onsubmit="sendComment(event)">
-                <input type="text" id="comment" placeholder="Enter test comment" required>
-                <input type="text" id="user" value="TestUser">
-                <button type="submit">Send Test Comment</button>
-            </form>
-        </div>
-
-        <div class="card">
-            <h3>📊 Stats:</h3>
-            <p>Total comments received: <span id="count">0</span></p>
-            <p>Server status: 🟢 Running</p>
-            <p>Server time: <span id="time"></span></p>
-        </div>
-
-        <script>
-            async function sendComment(event) {
-                event.preventDefault();
-                const comment = document.getElementById("comment").value;
-                const user = document.getElementById("user").value;
-                await fetch("/webhook", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ comment, user })
-                });
-                alert("Comment sent!");
-                loadStats();
-            }
-
-            async function loadStats() {
-                const res = await fetch("/comments");
-                const data = await res.json();
-                document.getElementById("count").innerText = data.length;
-
-                const health = await fetch("/health");
-                const h = await health.json();
-                document.getElementById("time").innerText = h.time;
-            }
-            loadStats();
-        </script>
-    </body>
-    </html>
-    """
-    return render_template_string(html)
+# ---------- UI and other endpoints (optional) ----------
+@app.route("/ui")
+def ui():
+    return send_from_directory(STATIC_FOLDER, "ui.html")
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
