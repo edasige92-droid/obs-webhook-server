@@ -1,0 +1,67 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<style>
+  html,body{margin:0;padding:0;background:transparent}
+  #box{
+    font-family: Arial, sans-serif;
+    position: fixed;
+    left:50%;
+    transform: translateX(-50%);
+    bottom: 8%;
+    min-width: 600px;
+    max-width: 1200px;
+    padding: 18px 26px;
+    border-radius: 10px;
+    background: rgba(0,0,0,0.6);
+    color: #fff;
+    font-size: 28px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.5);
+    opacity: 0;
+    transition: transform 0.45s cubic-bezier(.2,.8,.2,1), opacity 0.45s;
+    transform: translate(-50%, 30px);
+  }
+  #box.show{
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+  .name { font-weight:700; margin-right:10px; }
+  .text { font-weight:400; }
+</style>
+</head>
+<body>
+<div id="box"></div>
+
+<script>
+let last = "";
+const displayTime = 8000; // ms
+async function fetchAndShow(){
+  try{
+    const res = await fetch("/latest_comment");
+    if(!res.ok) return;
+    const data = await res.json();
+    const text = (data.comment || "").trim();
+    if(text && text !== last){
+      last = text;
+      const box = document.getElementById("box");
+      box.innerHTML = `<span class="name">${escapeHtml(data.user)}:</span> <span class="text">${escapeHtml(data.comment)}</span>`;
+      box.classList.add("show");
+      setTimeout(()=> box.classList.remove("show"), displayTime);
+    }
+  }catch(e){
+    console.warn("fetch error", e);
+  }
+}
+function escapeHtml(s){
+  if(!s) return "";
+  return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#39;"}[c]));
+}
+// poll every 1500 ms
+setInterval(fetchAndShow, 1500);
+// initial fetch
+fetchAndShow();
+</script>
+</body>
+</html>
