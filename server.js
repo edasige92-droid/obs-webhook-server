@@ -1,85 +1,94 @@
+// server.js
 const express = require("express");
 const bodyParser = require("body-parser");
-const http = require("http");
 const WebSocket = require("ws");
 
 const app = express();
-app.use(bodyParser.json());
+const PORT = process.env.PORT || 3000;
 
-const server = http.createServer(app);
+// ✅ Your secret verification token
+const VERIFY_TOKEN = "Personal92!";
+
+// Middleware
+app.use(bodyParser.json());
+app.use(express.static("static"));
+
+// WebSocket Server (for OBS overlay)
+const server = app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
 const wss = new WebSocket.Server({ server });
 
-// Store comments in memory
-let comments = [];
-let currentIndex = 0;
+let commentsQueue = [];
+let wsClients = [];
 
-// Send comments one by one in a loop
+// Facebook Webhook Verification (GET)
+app.get("/", (req, res) => {
+  let mode = req.query["hub.mode"];
+  let token = req.query["hub.verify_token"];
+  let challenge = req.query["hub.challenge"];
+
+  if (mode && token && mode === "subscribe" && token === VERIFY_TOKEN) {
+    console.log("✅ Webhook verified!");
+    res.status(200).send(challenge);
+  } else {
+    console.log("❌ Verification failed. Tokens do not match.");
+    res.sendStatus(403);
+  }
+});
+
+// Facebook Webhook Receiver (POST)
+app.post("/", (req, res) => {
+  let body = req.body;
+
+  if (body.object === "page") {
+    body.entry.forEach((entry) => {
+      let changes = entry.changes || [];
+      changes.forEach((change) => {
+        if (change.field === "feed" && change.value.comment_id) {
+          let comment = {
+            from: change.value.from ? change.value.from.name : "Anonymous",
+            message: change.value.message,
+          };
+
+          console.log("💬 New Comment:", comment);
+          commentsQueue.push(comment);
+          broadcastComments();
+        }
+      });
+    });
+
+    res.sendStatus(200);
+  } else {
+    res.sendStatus(404);
+  }
+});
+
+// WebSocket Connection
+wss.on("connection", (ws) => {
+  console.log("🔗 New WebSocket client connected");
+  wsClients.push(ws);
+
+  ws.on("close", () => {
+    wsClients = wsClients.filter((client) => client !== ws);
+  });
+});
+
+// Function to broadcast comments (loop through queue)
 function broadcastComments() {
-  if (comments.length === 0) return;
+  if (commentsQueue.length === 0) return;
 
-  const comment = comments[currentIndex];
-  wss.clients.forEach(client => {
+  let comment = commentsQueue.shift();
+
+  wsClients.forEach((client) => {
     if (client.readyState === WebSocket.OPEN) {
       client.send(JSON.stringify(comment));
     }
   });
 
-  // Move to next comment, loop if end reached
-  currentIndex = (currentIndex + 1) % comments.length;
+  // Push back to queue (looping effect)
+  commentsQueue.push(comment);
 
-  // Show next comment after 6 seconds
-  setTimeout(broadcastComments, 6000);
+  // Delay before showing next comment
+  setTimeout(broadcastComments, 5000); // 5 seconds per comment
 }
-
-// Facebook webhook verification
-app.get("/webhook", (req, res) => {
-  const VERIFY_TOKEN = "Personal92!";
-  const mode = req.query["hub.mode"];
-  const token = req.query["hub.verify_token"];
-  const challenge = req.query["hub.challenge"];
-
-  if (mode && token && mode === "subscribe" && token === VERIFY_TOKEN) {
-    console.log("WEBHOOK_VERIFIED");
-    res.status(200).send(challenge);
-  } else {
-    res.sendStatus(403);
-  }
-});
-
-// Webhook receiver for comments
-app.post("/webhook", (req, res) => {
-  console.log("Webhook event:", JSON.stringify(req.body, null, 2));
-
-  if (req.body.entry) {
-    req.body.entry.forEach(entry => {
-      if (entry.changes) {
-        entry.changes.forEach(change => {
-          if (
-            change.field === "comments" &&
-            change.value &&
-            change.value.message
-          ) {
-            const newComment = {
-              from: change.value.from ? change.value.from.name : "Anonymous",
-              message: change.value.message,
-            };
-            comments.push(newComment);
-            console.log("New comment added:", newComment);
-
-            // Start broadcasting if it isn’t already running
-            if (comments.length === 1) {
-              currentIndex = 0;
-              broadcastComments();
-            }
-          }
-        });
-      }
-    });
-  }
-
-  res.status(200).send("EVENT_RECEIVED");
-});
-
-server.listen(process.env.PORT || 3000, () => {
-  console.log("Server is running");
-});
