@@ -30,6 +30,11 @@ app.post("/facebook-webhook", (req, res) => {
   res.sendStatus(200);
 });
 
+// Root route
+app.get("/", (req, res) => {
+  res.send("✅ Facebook Webhook Server is running!");
+});
+
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
