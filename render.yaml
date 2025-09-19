@@ -1,7 +1,7 @@
 services:
   - type: web
     name: obs-webhook-server
-    env: python
+    env: node
     plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: python server.py
+    buildCommand: "npm install"
+    startCommand: "npm start"
