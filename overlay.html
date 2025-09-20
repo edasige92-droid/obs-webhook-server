@@ -2,40 +2,114 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Facebook Live Comments</title>
+  <title>Facebook Comments Overlay</title>
   <style>
     body {
       margin: 0;
+      padding: 0;
       background: transparent;
       font-family: Arial, sans-serif;
-      color: white;
     }
-    #comment-box {
-      position: absolute;
-      bottom: 10%;
-      left: 5%;
-      font-size: 28px;
-      background: rgba(0,0,0,0.6);
-      padding: 12px 20px;
+
+    #comments {
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      height: 100vh; /* Full height to mimic chat */
+      padding: 20px;
+      box-sizing: border-box;
+      overflow: hidden;
+    }
+
+    .comment-container {
+      display: flex;
+      align-items: center;
+      background: rgba(255, 255, 255, 0.9);
       border-radius: 12px;
-      animation: fadeInOut 6s ease-in-out infinite;
+      padding: 10px 15px;
+      margin: 5px 0;
+      box-shadow: 0 4px 10px rgba(0, 0, 0, 0.15);
+      max-width: 600px;
+      animation: fadeInUp 0.5s ease-in-out;
+      opacity: 1;
+      transition: opacity 2s ease;
     }
-    @keyframes fadeInOut {
-      0% { opacity: 0; }
-      10% { opacity: 1; }
-      90% { opacity: 1; }
-      100% { opacity: 0; }
+
+    .comment-container.fade-out {
+      opacity: 0;
+    }
+
+    .profile-pic {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      margin-right: 10px;
+      flex-shrink: 0;
+      border: 2px solid #1877f2;
+    }
+
+    .comment-text {
+      flex: 1;
+    }
+
+    .username {
+      font-weight: bold;
+      color: #FFD700; /* Yellow */
+      margin-bottom: 3px;
+    }
+
+    .message {
+      color: #1877f2; /* Facebook Blue */
+      font-size: 15px;
+      line-height: 1.4;
+    }
+
+    .fb-logo {
+      width: 22px;
+      height: 22px;
+      margin-left: 8px;
+    }
+
+    @keyframes fadeInUp {
+      from { opacity: 0; transform: translateY(20px); }
+      to { opacity: 1; transform: translateY(0); }
     }
   </style>
 </head>
 <body>
-  <div id="comment-box">Waiting for comments...</div>
+  <div id="comments"></div>
+
+  <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
   <script>
-    const ws = new WebSocket("wss://" + window.location.host);
-    ws.onmessage = (event) => {
-      const commentBox = document.getElementById("comment-box");
-      commentBox.textContent = event.data;
-    };
+    const socket = io("https://edasige2-webhook-server.onrender.com");
+
+    socket.on("comment", (data) => {
+      const commentBox = document.createElement("div");
+      commentBox.className = "comment-container";
+
+      commentBox.innerHTML = `
+        <img src="https://graph.facebook.com/${data.from.id}/picture?type=large" class="profile-pic" />
+        <div class="comment-text">
+          <div class="username">${data.from.name}</div>
+          <div class="message">${data.message}</div>
+        </div>
+        <img src="https://upload.wikimedia.org/wikipedia/commons/5/51/Facebook_f_logo_%282019%29.svg" class="fb-logo" />
+      `;
+
+      const commentsDiv = document.getElementById("comments");
+      commentsDiv.appendChild(commentBox);
+
+      // Auto-remove oldest if more than 8 messages visible
+      if (commentsDiv.children.length > 8) {
+        commentsDiv.removeChild(commentsDiv.firstChild);
+      }
+
+      // Fade out and remove after 30s
+      setTimeout(() => {
+        commentBox.classList.add("fade-out");
+        setTimeout(() => commentBox.remove(), 2000); // Wait for fade-out animation
+      }, 30000);
+    });
   </script>
 </body>
 </html>
